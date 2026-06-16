@@ -215,8 +215,8 @@ Response format MUST be:
 
             // --- 界面配置 ---
             // 我们希望窗口宽度是屏幕的 1/3，高度是屏幕的 1/3 (或者你喜欢的比例)
-            float responsiveWidth = Screen.width * 0.3f; // 30% 屏幕宽度
-            float responsiveHeight = Screen.height * 0.45f; // 45% 屏幕高度
+            float responsiveWidth = Mathf.Clamp(Screen.width * 0.3f, 360f, 640f); // 30% 屏幕宽度
+            float responsiveHeight = Mathf.Clamp(Screen.height * 0.45f, 300f, 560f); // 45% 屏幕高度
 
             // 绑定配置 (默认值使用刚才算出来的动态值)
             _windowWidthConfig = Config.Bind("3. UI", "WindowWidth", responsiveWidth, "窗口宽度");
@@ -235,7 +235,7 @@ Response format MUST be:
                 "静音游戏原生角色语音和动作音效（防止与 AI 语音冲突）");
 
             // --- 添加聊天按钮配置 ---
-            _addChatButtonConfig = Config.Bind("3. UI", "AddChatButton", false,
+            _addChatButtonConfig = Config.Bind("3. UI", "AddChatButton", IsMacPlatform(),
                 "在游戏UI中添加聊天按钮（开启后在屏幕右边显示）");
 
             // --- 人设配置 ---
@@ -332,6 +332,12 @@ Response format MUST be:
                    Application.platform == RuntimePlatform.OSXEditor ||
                    Application.platform == RuntimePlatform.LinuxPlayer ||
                    Application.platform == RuntimePlatform.LinuxEditor;
+        }
+
+        private static bool IsMacPlatform()
+        {
+            return Application.platform == RuntimePlatform.OSXPlayer ||
+                   Application.platform == RuntimePlatform.OSXEditor;
         }
 
         private static ProcessStartInfo CreateTTSProcessStartInfo(string scriptPath)
