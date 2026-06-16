@@ -12,7 +12,7 @@ COMMON_FILES = [
     "AIChat.dll",
     "api_v2_ex.py",
     "Voice_MainScenario_27_016.wav",
-    "README.html",
+    "请读我.html",
 ]
 
 PACKAGES = {
