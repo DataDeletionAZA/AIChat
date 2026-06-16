@@ -11,15 +11,29 @@
 ## 安装说明
 ### 安装 Mod 本体
 1. 下载 Mod
-   - 从 [Releases](https://github.com/qzrs777/AIChat/releases) 下载 `AIChatMod.zip` 并解压。
+   - 从 [Releases](https://github.com/qzrs777/AIChat/releases) 下载适合自己系统的压缩包并解压。
+     - Windows：下载 `AIChatMod-Windows.zip`（旧文件名 `AIChatMod.zip` 也仍然是 Windows 包）。
+     - macOS：下载 `AIChatMod-macOS.zip`。
+     - Linux：下载 `AIChatMod-Linux.zip`。
      - 推荐使用带版本号的[最新稳定版](https://github.com/qzrs777/AIChat/releases/latest)；[![Build Status](https://github.com/qzrs777/AIChat/actions/workflows/build-stable.yml/badge.svg)](https://github.com/qzrs777/AIChat/actions/workflows/build-stable.yml)
      - 或者使用由 GitHub Actions 在线构建的[最新预览版](https://github.com/qzrs777/AIChat/releases/tag/preview)。[![Build Status](https://github.com/qzrs777/AIChat/actions/workflows/build-preview.yml/badge.svg)](https://github.com/qzrs777/AIChat/actions/workflows/build-preview.yml)
      - 预览版比稳定版更新，相对来说有 bug 的概率会更高一些，而实际结果也可能反过来。
 
 2. 安装 BepInEx 前置
    - 在 Steam 右键游戏 -> 管理 -> 浏览本地文件（或直接定位游戏根目录）。
-   - 将压缩包内的 `BepInEx_*` 下的内容复制到游戏根目录。
+   - 将压缩包内的所有内容复制到游戏根目录。
+     - Windows 的游戏根目录里通常能看到游戏的 `.exe` 文件。
+     - macOS 的游戏根目录里通常能看到游戏的 `.app` 文件，例如 `Chill With You.app`。
      - Linux 用户请注意：Mod 能被加载的原理是，Windows 中的一些程序在启动时，同目录下的 DLL 文件（这里的是 `winhttp.dll`）比原本的 DLL 文件具有更高的优先级，从而被加载；但是在 Linux 下，Proton 自己的 DLL 文件具有更高的优先级，会无视同目录下的 `winhttp.dll`。所以，你需要在 Steam 的此游戏的设置里，将启动选项填写为 `WINEDLLOVERRIDES="winhttp=n,b" %command%` （其中 `winhttp` 就是 `winhttp.dll` 的文件名）。
+     - macOS 用户请注意：需要让 Steam 通过 `run_bepinex.sh` 启动游戏。做法如下：
+       1. 打开 Steam，右键游戏，点“管理”，再点“浏览本地文件”。
+       2. 在打开的文件夹里确认能看到 `run_bepinex.sh` 和游戏的 `.app` 文件。
+       3. 打开 Mac 自带的“终端”App。
+       4. 输入 `cd `（注意 `cd` 后面有一个空格），然后把刚才那个游戏文件夹拖进终端窗口，按回车。
+       5. 输入 `chmod u+x run_bepinex.sh`，按回车。这一步是允许这个启动脚本运行。
+       6. 回到 Steam，右键游戏，点“属性”。
+       7. 在“通用”里的“启动选项”填入：`"<游戏文件夹完整路径>/run_bepinex.sh" %command%`
+       8. 如果不知道完整路径，在刚才的终端窗口输入 `pwd` 并按回车，它显示出来的整行就是游戏文件夹完整路径。
    - 运行一次游戏。
      - 这一步用于生成插件目录结构，包括 `BepInEx` 目录下的 `config`、`core`、`patchers`、`plugins` 等目录。
 
@@ -47,6 +61,22 @@
      pause
      ```
      然后重命名文件，将 `.txt` 后缀去掉即可。
+   - macOS 用户：推荐先手动启动 GPT-SoVITS，确认语音服务能打开，再让 Mod 自动启动它。
+     - 如果你把 GPT-SoVITS 放在用户文件夹下的 `GPT-SoVITS` 目录，Mod 默认会尝试运行：
+       ```plain
+       ~/GPT-SoVITS/run_api.command
+       ```
+     - 如果没有这个文件，可以在 GPT-SoVITS 根目录新建 `run_api.command`，内容示例：
+       ```bash
+       #!/bin/bash
+       cd "$(dirname "$0")"
+       python api_v2.py -a 127.0.0.1 -p 9880
+       ```
+     - 保存后，打开“终端”App，进入 GPT-SoVITS 文件夹，运行：
+       ```bash
+       chmod u+x run_api.command
+       ```
+     - 如果你的 GPT-SoVITS 路径不是 `~/GPT-SoVITS`，就在 Mod 的 TTS 设置里，把 `TTS 服务脚本文件路径` 改成你自己的 `run_api.command` 完整路径。
    - Linux 用户：Nvidia 显卡用户推荐使用 Docker（目前官方提供的 Docker 镜像仅支持 Nvidia 显卡），因为 Docker 具有稳定、易迁移、方便统一管理的特性。若不想使用 Docker 或显卡不是 Nvidia 的，则需要使用 conda 来运行，请自行参考 [GPT-SoVITS 的 README](https://github.com/RVC-Boss/GPT-SoVITS#linux)，**注意不是文档也不是 User guide**；也可适当参考本仓库的 `GPT-SoVITS-Linux` 目录。以下是使用 Docker 的步骤：
      - 安装 Docker、Docker Compose、Nvidia Container Toolkit 三件套，方法分别参见 [Install | Docker Docs](https://docs.docker.com/engine/install/)、[Plugin | Docker Docs](https://docs.docker.com/compose/install/linux/#install-using-the-repository) 和 [Installing the NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)。
      - 克隆 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)：
@@ -214,7 +244,7 @@
 本 Mod 的核心 `AIChat.dll` 可从仓库构建。
 
 ### 本地构建
-以下构建流程适合 Windows 与 Linux。
+以下构建流程适合 Windows、macOS 与 Linux。
 
 - 克隆仓库到本地。
 - 安装依赖：
@@ -233,6 +263,15 @@
   - 若要构建 Console 版本（生成 exe 文件，用于调试），运行 `dotnet build -c Console`。
   - 若要构建 Release 版本，运行 `dotnet build -c Release`。
 - 构建产物位于 `AIChat/bin/<构建种类>/<.NET 版本>/AIChat.dll`
+- 若要生成可直接发布的压缩包，先完成 Release 构建并生成 `README.html`，再运行：
+  ```sh
+  python build-resource/package.py
+  ```
+  它会生成：
+  - `AIChatMod-Windows.zip`
+  - `AIChatMod-macOS.zip`
+  - `AIChatMod-Linux.zip`
+  - `AIChatMod.zip`（兼容旧下载名，内容同 Windows 包）
   > 提示：运行此命令可查看所有被 `.gitignore` 忽略的文件（在构建时所生成的文件一般都需要被忽略）：
   > ```bash
   > git ls-files --others --ignored --exclude-standard
@@ -260,6 +299,16 @@
   - 检查 Mod 日志。
 - Mod 没有生效 / 找不到 plugins 文件夹
   - 运行一次游戏，以生成必要的目录结构；之后再将 `AIChat.dll` 放入 `BepInEx/plugins` 下。
+- macOS 下 Mod 没有生效
+  - 确认下载的是 `AIChatMod-macOS.zip`。
+  - 确认 Steam 的启动选项中使用了 `run_bepinex.sh`，而不是直接启动游戏。
+  - 确认已经在游戏目录运行过 `chmod u+x run_bepinex.sh`。
+  - 确认游戏目录下生成了 `BepInEx/LogOutput.log`。如果没有这个文件，说明 BepInEx 还没有成功启动。
+  - 如果 `BepInEx/LogOutput.log` 存在但没有 AIChat 相关日志，确认 `AIChat.dll` 是否已经放在 `BepInEx/plugins` 文件夹里。
+- macOS 下 TTS 自动启动失败
+  - 先手动运行 `run_api.command`，确认 GPT-SoVITS 本身能启动。
+  - 在 Mod 的 TTS 设置里检查 `TTS 服务脚本文件路径`，默认是 `~/GPT-SoVITS/run_api.command`。
+  - 如果你的 GPT-SoVITS 放在别的位置，请把这里改成真实路径。
 - AI 返回中文，但被 TTS 读出发音异常
   - 检查 Mod 日志。
   - 若 AI 返回的内容不符合格式要求，请确保使用合适的系统提示词，或尝试更换 AI 模型。
@@ -574,4 +623,3 @@
 | 10103 | Event_NewYear_Countdown_004 | 新年倒计时4 |
 
 </details>
-

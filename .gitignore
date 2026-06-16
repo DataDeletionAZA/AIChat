@@ -30,8 +30,11 @@ BepInEx.dll
 
 secrets.json
 *.cfg
+__pycache__/
+*.zip
 
 !/build-resource/**
+/build-resource/**/__pycache__/
 # build-resource 中的 Unity DLL 文件，除 UnityEngine.UI.dll 外，都是闭源的，不应包含在仓库内。
 /build-resource/buildenv/mokgamedir/Chill With You_Data/Managed/UnityEngine.dll
 /build-resource/buildenv/mokgamedir/Chill With You_Data/Managed/UnityEngine.*.dll
@@ -40,3 +43,5 @@ secrets.json
 # BepInEx 虽然是开源的，也不应包含在仓库内。
 /build-resource/assets/BepInEx_win_x64/**
 !/build-resource/assets/BepInEx_win_x64/LICENSE
+/build-resource/assets/BepInEx_macos_x64/**
+/build-resource/assets/BepInEx_linux_x64/**

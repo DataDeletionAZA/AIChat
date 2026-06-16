@@ -12,9 +12,15 @@ BEPINEX_VERSION = "5.4.23.4"
 
 SCRIPT_DIR = Path(__file__).parent.absolute()
 UNITY_DEPS_DIR = SCRIPT_DIR / "mokgamedir/Chill With You_Data/Managed"
-BEPINEX_DIR = SCRIPT_DIR / "assets/BepInEx_win_x64"
-
-BEPINEX_URL = f"https://github.com/BepInEx/BepInEx/releases/download/v{BEPINEX_VERSION}/BepInEx_win_x64_{BEPINEX_VERSION}.zip"
+BEPINEX_DISTRIBUTIONS = {
+    "BepInEx_win_x64": f"https://github.com/BepInEx/BepInEx/releases/download/v{BEPINEX_VERSION}/BepInEx_win_x64_{BEPINEX_VERSION}.zip",
+    "BepInEx_macos_x64": f"https://github.com/BepInEx/BepInEx/releases/download/v{BEPINEX_VERSION}/BepInEx_macos_x64_{BEPINEX_VERSION}.zip",
+    "BepInEx_linux_x64": f"https://github.com/BepInEx/BepInEx/releases/download/v{BEPINEX_VERSION}/BepInEx_linux_x64_{BEPINEX_VERSION}.zip",
+}
+BEPINEX_DIRS = {
+    name: SCRIPT_DIR / "assets" / name
+    for name in BEPINEX_DISTRIBUTIONS
+}
 
 if sys.platform == "win32":
     NUGET_PATH = Path(os.environ["USERPROFILE"]) / ".nuget" / "packages" / "unityengine.modules" / UNITY_VERSION / "lib" / "net45"
@@ -54,19 +60,25 @@ def check_files_exist(folder_path, file_list):
 
     return True
 
-def download_bepinex():
-    BEPINEX_DIR.mkdir(parents=True, exist_ok=True)
+def download_bepinex(distribution_name):
+    if distribution_name not in BEPINEX_DISTRIBUTIONS:
+        print(f"未知 BepInEx 发行包: {distribution_name}")
+        return 1
 
-    temp_file = BEPINEX_DIR / "bepinex.zip"
+    bepinex_dir = BEPINEX_DIRS[distribution_name]
+    bepinex_url = BEPINEX_DISTRIBUTIONS[distribution_name]
+    bepinex_dir.mkdir(parents=True, exist_ok=True)
+
+    temp_file = bepinex_dir / "bepinex.zip"
     try:
-        print(f"正在下载 BepInEx v{BEPINEX_VERSION}...")
-        print(f"下载地址: {BEPINEX_URL}")
+        print(f"正在下载 {distribution_name} v{BEPINEX_VERSION}...")
+        print(f"下载地址: {bepinex_url}")
         try:
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             
-            with urllib.request.urlopen(BEPINEX_URL, context=ssl_context) as response, open(temp_file, 'wb') as out_file:
+            with urllib.request.urlopen(bepinex_url, context=ssl_context) as response, open(temp_file, 'wb') as out_file:
                 total_size = int(response.headers.get('Content-Length', 0))
                 downloaded = 0
                 block_size = 8192
@@ -90,12 +102,12 @@ def download_bepinex():
         try:
             with zipfile.ZipFile(temp_file, 'r') as zip_ref:
                 zip_ref.testzip()
-                zip_ref.extractall(BEPINEX_DIR)
+                zip_ref.extractall(bepinex_dir)
         except Exception as e:
             raise Exception(f"\n解压失败: {str(e)}")
 
-        print(f"BepInEx v{BEPINEX_VERSION} 下载并解压完成")
-        print(f"路径: {BEPINEX_DIR}")
+        print(f"{distribution_name} v{BEPINEX_VERSION} 下载并解压完成")
+        print(f"路径: {bepinex_dir}")
         return 0
 
     except Exception as e:
@@ -177,14 +189,15 @@ def download_unity_dlls():
         if temp_dir.exists(): shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
-    if not check_files_exist(BEPINEX_DIR / "BepInEx/core", BEPINEX_DLL_LIST):
-        print("===== 开始下载 BepInEx =====")
-        ret = download_bepinex()
-        if ret != 0:
-            print("BepInEx 下载失败")
-            sys.exit(ret)
-    else:
-        print(f"BepInEx OK")
+    for distribution_name, bepinex_dir in BEPINEX_DIRS.items():
+        if not check_files_exist(bepinex_dir / "BepInEx/core", BEPINEX_DLL_LIST):
+            print(f"===== 开始下载 {distribution_name} =====")
+            ret = download_bepinex(distribution_name)
+            if ret != 0:
+                print(f"{distribution_name} 下载失败")
+                sys.exit(ret)
+        else:
+            print(f"{distribution_name} OK")
 
     if not check_files_exist(UNITY_DEPS_DIR, UNITY_DLL_LIST):
         print("\n===== 开始下载 UnityEngine DLL =====")

@@ -36,7 +36,10 @@ jobs:
         id: cache-bepinex
         uses: actions/cache@v4
         with:
-          path: build-resource/assets/BepInEx_win_x64
+          path: |
+            build-resource/assets/BepInEx_win_x64
+            build-resource/assets/BepInEx_macos_x64
+            build-resource/assets/BepInEx_linux_x64
           key: bepinex-${{ hashFiles('build-resource/fetch.py') }}
           restore-keys: |
             bepinex-
@@ -68,10 +71,8 @@ jobs:
       - name: Add README.html
         run: build-resource/readme/build.sh
 
-      - name: Zip Artifact
-        run: |
-          cd build-resource/assets/
-          zip -r ../../AIChatMod.zip .
+      - name: Package Artifacts
+        run: python3 build-resource/package.py
 
       - name: Delete old preview release with tag
         continue-on-error: true
@@ -96,6 +97,10 @@ jobs:
 
             > 临时版本号的格式为 `0.<UTC 年月日>.<UTC 时分秒>.<提交哈希前 5 位依次转 10 位数字>`
           prerelease: true
-          files: AIChatMod.zip
+          files: |
+            AIChatMod.zip
+            AIChatMod-Windows.zip
+            AIChatMod-macOS.zip
+            AIChatMod-Linux.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

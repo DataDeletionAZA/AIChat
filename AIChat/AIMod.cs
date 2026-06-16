@@ -17,7 +17,6 @@ using AIChat.Core;
 using AIChat.Services;
 using AIChat.Unity;
 using AIChat.Interop;
-using System.Collections.Generic;
 using AIChat.Utils;
 
 namespace ChillAIMod
@@ -203,7 +202,7 @@ Response format MUST be:
 
             // --- TTS 配置 ---
             _sovitsUrlConfig = Config.Bind("2. TTS", "TTS_Service_URL", "http://127.0.0.1:9880", "TTS 服务 URL");
-            _TTSServicePathConfig = Config.Bind("2. TTS", "TTS_Service_Script_Path", @"D:\GPT-SoVITS\GPT-SoVITS-v2pro-20250604-nvidia50\run_api.bat", "TTS 服务脚本文件路径");
+            _TTSServicePathConfig = Config.Bind("2. TTS", "TTS_Service_Script_Path", GetDefaultTTSServiceScriptPath(), "TTS 服务脚本文件路径");
             _LaunchTTSServiceConfig = Config.Bind("2. TTS", "LaunchTTSService", true, "启动时自动运行 TTS 服务");
             _quitTTSServiceOnQuitConfig = Config.Bind("2. TTS", "QuitTTSServiceOnQuit", true, "退出时自动关闭 TTS 服务");
             _refAudioPathConfig = Config.Bind("2. TTS", "Audio_File_Path", @"Voice_MainScenario_27_016.wav", "GSV 访问音频文件的路径（可以是相对路径）");
@@ -267,24 +266,7 @@ Response format MUST be:
             _tempWidthString = _windowWidthConfig.Value.ToString("F0");
             _tempHeightString = _windowHeightConfig.Value.ToString("F0");
             _tempVolumeString = _voiceVolumeConfig.Value.ToString("F2");
-            string cleanPath = _TTSServicePathConfig.Value.Replace("\"", "").Trim();
-            if (_LaunchTTSServiceConfig.Value && File.Exists(_TTSServicePathConfig.Value))
-            {
-                try
-                {
-                    ProcessStartInfo startInfo = new ProcessStartInfo(cleanPath)
-                    {
-                        UseShellExecute = true,
-                        WorkingDirectory = Path.GetDirectoryName(cleanPath)
-                    };
-                    _launchedTTSProcess = Process.Start(startInfo);
-                    Log.Info("已启动 TTS 服务");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"启动 TTS 服务失败: {ex.Message}");
-                }
-            }
+            TryLaunchTTSService();
             // 启动后台 TTS 健康检测
             if (_ttsHealthCheckCoroutine == null)
             {
@@ -299,6 +281,113 @@ Response format MUST be:
             }
 
             Log.Info($">>> AIMod V{AIChat.Version.VersionString}  已加载 <<<");
+        }
+
+        private static string GetDefaultTTSServiceScriptPath()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (Application.platform == RuntimePlatform.OSXPlayer ||
+                Application.platform == RuntimePlatform.OSXEditor)
+            {
+                return Path.Combine(home, "GPT-SoVITS", "run_api.command");
+            }
+
+            if (Application.platform == RuntimePlatform.LinuxPlayer ||
+                Application.platform == RuntimePlatform.LinuxEditor)
+            {
+                return Path.Combine(home, "GPT-SoVITS", "run_api.sh");
+            }
+
+            return @"D:\GPT-SoVITS\GPT-SoVITS-v2pro-20250604-nvidia50\run_api.bat";
+        }
+
+        private static string NormalizeLocalPath(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath)) return string.Empty;
+
+            string cleanPath = Environment.ExpandEnvironmentVariables(rawPath.Replace("\"", "").Trim());
+            if (cleanPath == "~") return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (cleanPath.StartsWith("~/") || cleanPath.StartsWith("~\\"))
+            {
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string relativePath = cleanPath.Substring(2)
+                    .Replace('\\', Path.DirectorySeparatorChar)
+                    .Replace('/', Path.DirectorySeparatorChar);
+                return Path.Combine(home, relativePath);
+            }
+
+            return cleanPath;
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+
+        private static bool IsUnixLikePlatform()
+        {
+            return Application.platform == RuntimePlatform.OSXPlayer ||
+                   Application.platform == RuntimePlatform.OSXEditor ||
+                   Application.platform == RuntimePlatform.LinuxPlayer ||
+                   Application.platform == RuntimePlatform.LinuxEditor;
+        }
+
+        private static ProcessStartInfo CreateTTSProcessStartInfo(string scriptPath)
+        {
+            string workingDirectory = Path.GetDirectoryName(scriptPath);
+            if (string.IsNullOrWhiteSpace(workingDirectory))
+            {
+                workingDirectory = Environment.CurrentDirectory;
+            }
+            string extension = Path.GetExtension(scriptPath).ToLowerInvariant();
+
+            if (IsUnixLikePlatform() && (extension == ".sh" || extension == ".command"))
+            {
+                return new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = QuoteArgument(scriptPath),
+                    UseShellExecute = false,
+                    WorkingDirectory = workingDirectory
+                };
+            }
+
+            return new ProcessStartInfo(scriptPath)
+            {
+                UseShellExecute = !IsUnixLikePlatform(),
+                WorkingDirectory = workingDirectory
+            };
+        }
+
+        private void TryLaunchTTSService()
+        {
+            if (!_LaunchTTSServiceConfig.Value) return;
+
+            string scriptPath = NormalizeLocalPath(_TTSServicePathConfig.Value);
+            if (string.IsNullOrWhiteSpace(scriptPath))
+            {
+                Log.Warning("TTS 服务脚本路径为空，已跳过自动启动。");
+                return;
+            }
+
+            if (!File.Exists(scriptPath))
+            {
+                Log.Warning($"TTS 服务脚本不存在，已跳过自动启动: {scriptPath}");
+                return;
+            }
+
+            try
+            {
+                ProcessStartInfo startInfo = CreateTTSProcessStartInfo(scriptPath);
+                _launchedTTSProcess = Process.Start(startInfo);
+                Log.Info($"已启动 TTS 服务: {scriptPath}");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"启动 TTS 服务失败: {ex.Message}");
+            }
         }
 
         private bool _aiChatButtonAdded = false;
