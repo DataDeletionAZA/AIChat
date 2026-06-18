@@ -86,9 +86,6 @@ namespace ChillAIMod
 
         // --- 新增：添加聊天按钮配置 ---
         private ConfigEntry<bool> _addChatButtonConfig;
-        private ConfigEntry<float> _chatButtonOffsetXConfig;
-        private ConfigEntry<float> _chatButtonOffsetYConfig;
-        private ConfigEntry<float> _chatButtonSizeConfig;
 
         // 缓存游戏 UI 引用（避免 Find 在隐藏对象上失败）
         private Transform _cachedOriginalTextTrans = null;
@@ -243,12 +240,6 @@ Response format MUST be:
             // --- 添加聊天按钮配置 ---
             _addChatButtonConfig = Config.Bind("3. UI", "AddChatButton", IsMacPlatform(),
                 "在游戏UI中添加聊天按钮（开启后在屏幕右边显示）");
-            _chatButtonOffsetXConfig = Config.Bind("3. UI", "ChatButtonOffsetX", -300f,
-                "AI聊天按钮相对右上角的横向位置。负数越大越靠左");
-            _chatButtonOffsetYConfig = Config.Bind("3. UI", "ChatButtonOffsetY", -175f,
-                "AI聊天按钮相对右上角的纵向位置。负数越大越靠下");
-            _chatButtonSizeConfig = Config.Bind("3. UI", "ChatButtonSize", 52f,
-                "AI聊天按钮大小");
 
             // --- 人设配置 ---
             _useFinetunedModel = Config.Bind("4. Persona", "UseFinetunedModel", false,
@@ -452,8 +443,6 @@ Response format MUST be:
 
         void OnGUI()
         {
-            DrawMacFloatingChatButton();
-
             Event e = Event.current;
             if (e.isKey && e.type == EventType.KeyDown && (e.keyCode == KeyCode.F9 || e.keyCode == KeyCode.F10))
             {
@@ -529,47 +518,6 @@ Response format MUST be:
                 _windowRect = GUI.Window(12345, _windowRect, DrawWindowContent, windowTitle);
                 GUI.FocusWindow(12345);
             }
-        }
-
-        private void DrawMacFloatingChatButton()
-        {
-            if (!IsMacPlatform() || _addChatButtonConfig == null || !_addChatButtonConfig.Value)
-            {
-                return;
-            }
-
-            float buttonSize = Mathf.Clamp(_chatButtonSizeConfig?.Value ?? 52f, 38f, 72f);
-            float offsetX = _chatButtonOffsetXConfig?.Value ?? -300f;
-            float offsetY = _chatButtonOffsetYConfig?.Value ?? -175f;
-
-            float x = Screen.width + offsetX - buttonSize * 0.5f;
-            float y = Mathf.Abs(offsetY) - buttonSize * 0.5f;
-            x = Mathf.Clamp(x, 8f, Screen.width - buttonSize - 8f);
-            y = Mathf.Clamp(y, 8f, Screen.height - buttonSize - 8f);
-
-            Color oldBackgroundColor = GUI.backgroundColor;
-            Color oldColor = GUI.color;
-            int oldDepth = GUI.depth;
-
-            GUI.depth = -10000;
-            GUI.backgroundColor = new Color(0.08f, 0.08f, 0.16f, 0.92f);
-            GUI.color = Color.white;
-
-            GUIStyle buttonStyle = new GUIStyle(GUI.skin.button)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontStyle = FontStyle.Bold,
-                fontSize = Mathf.RoundToInt(buttonSize * 0.36f)
-            };
-
-            if (GUI.Button(new Rect(x, y, buttonSize, buttonSize), "AI", buttonStyle))
-            {
-                _showInputWindow = !_showInputWindow;
-            }
-
-            GUI.depth = oldDepth;
-            GUI.backgroundColor = oldBackgroundColor;
-            GUI.color = oldColor;
         }
 
         void DrawWindowContent(int windowID)
@@ -1628,22 +1576,22 @@ Response format MUST be:
         }
 
         /// <summary>
-        /// 在 Level 下方添加一个独立的 AI 聊天按钮，避免遮挡右侧工具栏。
+        /// 在屏幕右面的按钮最下面添加一个AI聊天按钮
         /// </summary>
         private void AddAIChatButtonToRightIcons()
         {
             try
             {
-                string mostFrontPath = "Paremt/PCPlatform/Canvas/UI/MostFrontArea";
-                string fallbackPath = "Paremt/PCPlatform/Canvas/UI/MostFrontArea/TopIcons";
-                GameObject buttonParent = GameObject.Find(mostFrontPath) ?? GameObject.Find(fallbackPath);
+                // 查找RightIcons容器（参考UIRearrangePatch.cs中的路径）
+                string topIconsPath = "Paremt/PCPlatform/Canvas/UI/MostFrontArea/TopIcons";
+                GameObject rightIcons = GameObject.Find(topIconsPath);
                 
-                if (buttonParent == null)
+                if (rightIcons == null)
                 {
                     _aiChatButtonMissingWarnings++;
                     if (_aiChatButtonMissingWarnings <= 3 || _aiChatButtonMissingWarnings % 12 == 0)
                     {
-                        Log.Warning($"找不到AI聊天按钮父容器: {mostFrontPath}");
+                        Log.Warning($"找不到TopIcons容器: {topIconsPath}");
                     }
                     return;
                 }
@@ -1653,12 +1601,25 @@ Response format MUST be:
                 // 创建新按钮游戏对象
                 _aiChatButton = new GameObject("IconAIChat_Button");
                 
-                // 设置为最前 UI 区域的子节点，不参与右侧工具栏布局
-                _aiChatButton.transform.SetParent(buttonParent.transform, false);
+                // 设置为RightIcons的子节点
+                _aiChatButton.transform.SetParent(rightIcons.transform, false);
                 
                 // 添加RectTransform组件
                 RectTransform rectTransform = _aiChatButton.AddComponent<RectTransform>();
-                ApplyAIChatButtonLayout(rectTransform);
+                
+                // 获取RightIcons中其他按钮的大小作为参考
+                float buttonSize = 60f; // 默认大小
+                if (rightIcons.transform.childCount > 0)
+                {
+                    RectTransform firstButtonRect = rightIcons.transform.GetChild(0).GetComponent<RectTransform>();
+                    if (firstButtonRect != null)
+                    {
+                        buttonSize = Mathf.Max(firstButtonRect.sizeDelta.x, firstButtonRect.sizeDelta.y);
+                    }
+                }
+                
+                // 设置按钮大小
+                rectTransform.sizeDelta = new Vector2(buttonSize, buttonSize);
 
                 // 添加Image组件
                 Image image = _aiChatButton.AddComponent<Image>();
@@ -1684,11 +1645,46 @@ Response format MUST be:
                 {
                     _showInputWindow = !_showInputWindow;
                 });
-
+                
+                // 设置按钮位置到最底部
+                // 获取所有子节点并按位置排序
+                List<RectTransform> children = new List<RectTransform>();
+                for (int i = 0; i < rightIcons.transform.childCount; i++)
+                {
+                    RectTransform childRect = rightIcons.transform.GetChild(i).GetComponent<RectTransform>();
+                    if (childRect != null && childRect.gameObject != _aiChatButton)
+                    {
+                        children.Add(childRect);
+                    }
+                }
+                
+                // 按Y坐标排序（Unity UI中Y值越小越靠下）
+                children.Sort((a, b) => a.anchoredPosition.y.CompareTo(b.anchoredPosition.y));
+                
+                // 如果有其他按钮，将新按钮放在最下面
+                if (children.Count > 0) // 至少有一个其他按钮
+                {
+                    RectTransform lowestButton = children[0]; // 第一个是最下面的
+                    float spacing = 10f;
+                    rectTransform.anchoredPosition = new Vector2(
+                        lowestButton.anchoredPosition.x,
+                        lowestButton.anchoredPosition.y - (buttonSize + spacing)
+                    );
+                }
+                else
+                {
+                    // 如果是第一个按钮，居中放置
+                    rectTransform.anchoredPosition = Vector2.zero;
+                }
+                
+                // 设置锚点和pivot，使其与其他按钮一致
+                rectTransform.anchorMin = new Vector2(1f, 1f);
+                rectTransform.anchorMax = new Vector2(1f, 1f);
+                rectTransform.pivot = new Vector2(0.5f, 0.5f);
                 KeepAIChatButtonOnTop();
                 
                 _aiChatButtonAdded = true;
-                Log.Info($"✅ AI聊天按钮已添加到Level下方区域");
+                Log.Info($"✅ AI聊天按钮已添加到RightIcons容器");
             }
             catch (Exception ex)
             {
@@ -1696,26 +1692,9 @@ Response format MUST be:
             }
         }
 
-        private void ApplyAIChatButtonLayout(RectTransform rectTransform)
-        {
-            if (rectTransform == null) return;
-
-            float buttonSize = Mathf.Clamp(_chatButtonSizeConfig.Value, 38f, 72f);
-            rectTransform.anchorMin = new Vector2(1f, 1f);
-            rectTransform.anchorMax = new Vector2(1f, 1f);
-            rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            rectTransform.sizeDelta = new Vector2(buttonSize, buttonSize);
-            rectTransform.anchoredPosition = new Vector2(
-                _chatButtonOffsetXConfig.Value,
-                _chatButtonOffsetYConfig.Value
-            );
-        }
-
         private void KeepAIChatButtonOnTop()
         {
             if (_aiChatButton == null) return;
-
-            ApplyAIChatButtonLayout(_aiChatButton.GetComponent<RectTransform>());
 
             _aiChatButton.transform.SetAsLastSibling();
 
