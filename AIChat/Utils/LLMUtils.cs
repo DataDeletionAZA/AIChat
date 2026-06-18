@@ -76,20 +76,10 @@ namespace AIChat.Utils
         public static LLMStandardResponse ParseStandardResponse(string response)
         {
             LLMStandardResponse ret = new LLMStandardResponse(false, "Think", "", response);
-            // 按 ||| 分割（注意：有些模型可能会用单个 | ）
-            string[] parts = response.Split(new string[] { "|||" }, StringSplitOptions.None);
 
-            // 如果不是 |||，尝试单个 |
-            if (parts.Length < 3)
+            bool TryApplyParts(string emotionPart, string voicePart, string subtitlePart)
             {
-                parts = response.Split(new string[] { "|" }, StringSplitOptions.None);
-            }
-
-            // 【核心修改：严格的格式检查 + 正则容错】
-            if (parts.Length >= 3)
-            {
-                // 用正则提取标签名，容错处理多余括号等情况
-                var tagMatch = Regex.Match(parts[0], @"\[(\w+)\]");
+                var tagMatch = Regex.Match(emotionPart, @"\[(\w+)\]");
                 if (tagMatch.Success)
                 {
                     ret.EmotionTag = tagMatch.Groups[1].Value;
@@ -97,13 +87,26 @@ namespace AIChat.Utils
                 else
                 {
                     // fallback：去掉所有非字母字符
-                    ret.EmotionTag = Regex.Replace(parts[0].Trim(), @"[^\w]", "");
+                    ret.EmotionTag = Regex.Replace(emotionPart.Trim(), @"[^\w]", "");
                     if (string.IsNullOrEmpty(ret.EmotionTag)) ret.EmotionTag = "Idle";
                 }
-                ret.VoiceText = parts[1].Trim();
-                ret.SubtitleText = parts[2].Trim();
+
+                ret.VoiceText = voicePart.Trim();
+                ret.SubtitleText = subtitlePart.Trim();
+                if (string.IsNullOrWhiteSpace(ret.VoiceText) && string.IsNullOrWhiteSpace(ret.SubtitleText))
+                {
+                    return false;
+                }
 
                 ret.Success = true;
+                return true;
+            }
+
+            // 标准格式: [Emotion] ||| 日文 ||| 中文
+            string[] parts = response.Split(new string[] { "|||" }, StringSplitOptions.None);
+            if (parts.Length >= 3)
+            {
+                TryApplyParts(parts[0], parts[1], parts[2]);
             }
 
             // 兜底：格式不完整时尝试智能解析
@@ -119,8 +122,36 @@ namespace AIChat.Utils
                     ret.Success = true;
                     Log.Warning($"[格式兜底-两段] [{ret.EmotionTag}] voice={ret.VoiceText} sub={ret.SubtitleText}");
                 }
+                // 情况1.5: [Tag] | 日文 | 中文（只有单个 | 的旧格式）
+                else if (!response.Contains("|||"))
+                {
+                    string[] singlePipeParts = response
+                        .Split(new string[] { "|" }, StringSplitOptions.None)
+                        .Select(p => p.Trim())
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .ToArray();
+
+                    if (singlePipeParts.Length >= 3 && TryApplyParts(singlePipeParts[0], singlePipeParts[1], singlePipeParts[2]))
+                    {
+                        Log.Warning($"[格式兜底-单竖线] [{ret.EmotionTag}] voice={ret.VoiceText} sub={ret.SubtitleText}");
+                    }
+                }
+                // 情况1.6: [Tag] 日文｜中文（全角竖线，常见于中文/日文输入法）
+                if (!ret.Success)
+                {
+                    var fullWidthPipeMatch = Regex.Match(response, @"\[(\w+)\]\s*(.+?)\s*｜\s*(.+)");
+                    if (fullWidthPipeMatch.Success)
+                    {
+                        ret.EmotionTag = fullWidthPipeMatch.Groups[1].Value;
+                        ret.VoiceText = fullWidthPipeMatch.Groups[2].Value.Trim();
+                        ret.SubtitleText = fullWidthPipeMatch.Groups[3].Value.Trim();
+                        ret.Success = true;
+                        Log.Warning($"[格式兜底-全角竖线] [{ret.EmotionTag}] voice={ret.VoiceText} sub={ret.SubtitleText}");
+                    }
+                }
+
                 // 情况2: [Tag] 纯内容（没有 |||）
-                else
+                if (!ret.Success)
                 {
                     var fallbackMatch = Regex.Match(response, @"\[(\w+)\]\s*(.+)");
                     if (fallbackMatch.Success)

@@ -53,6 +53,7 @@ namespace ChillAIMod
         // --- 新增窗口大小配置 ---
         private ConfigEntry<float> _windowWidthConfig;
         private ConfigEntry<float> _windowHeightConfig;
+        private ConfigEntry<float> _fontScaleConfig;
 
         // --- 新增音量配置 ---
         private ConfigEntry<float> _voiceVolumeConfig;
@@ -221,6 +222,8 @@ Response format MUST be:
             // 绑定配置 (默认值使用刚才算出来的动态值)
             _windowWidthConfig = Config.Bind("3. UI", "WindowWidth", responsiveWidth, "窗口宽度");
             _windowHeightConfig = Config.Bind("3. UI", "WindowHeightBase", responsiveHeight, "窗口高度");
+            _fontScaleConfig = Config.Bind("3. UI", "FontScale", IsMacPlatform() ? 1.25f : 1.0f,
+                "UI 字体倍率。Mac 高分辨率屏幕可调大，例如 1.20 - 1.50");
             _reverseEnterBehaviorConfig = Config.Bind("3. UI", "ReverseEnterBehavior", false, 
                 "反转回车键行为（勾选后：回车键换行、Shift+回车键发送；不勾选：回车键发送、Shift+回车键换行）");
             
@@ -398,6 +401,8 @@ Response format MUST be:
 
         private bool _aiChatButtonAdded = false;
         private GameObject _aiChatButton;
+        private int _aiChatButtonMissingWarnings = 0;
+        private float _nextAIChatButtonSearchTime = 0f;
 
         void Update()
         {
@@ -424,9 +429,15 @@ Response format MUST be:
             }
 
             // 检查并添加AI聊天按钮
-            if (_addChatButtonConfig.Value && !_aiChatButtonAdded && Time.frameCount % 300 == 0) // 每5秒检查一次，避免频繁查找
+            if (_addChatButtonConfig.Value && !_aiChatButtonAdded && Time.unscaledTime >= _nextAIChatButtonSearchTime)
             {
+                _nextAIChatButtonSearchTime = Time.unscaledTime + 5f;
                 AddAIChatButtonToRightIcons();
+            }
+
+            if (_addChatButtonConfig.Value && _aiChatButtonAdded && _aiChatButton != null && Time.frameCount % 120 == 0)
+            {
+                KeepAIChatButtonOnTop();
             }
         }
 
@@ -513,8 +524,9 @@ Response format MUST be:
         {
             // ================= 【1. 动态尺寸计算】 =================
             // 根据屏幕高度计算基础字号 (2.5% 屏幕高度)
-            int dynamicFontSize = (int)(Screen.height * 0.015f);
-            dynamicFontSize = Mathf.Clamp(dynamicFontSize, 14, 40);
+            float fontScale = Mathf.Clamp(_fontScaleConfig.Value, 0.8f, 1.8f);
+            int dynamicFontSize = (int)(Screen.height * 0.015f * fontScale);
+            dynamicFontSize = Mathf.Clamp(dynamicFontSize, 14, 48);
 
             // 全局样式应用
             GUI.skin.label.fontSize = dynamicFontSize;
@@ -774,6 +786,15 @@ Response format MUST be:
                             _tempHeightString = newHeight.ToString("F0");
                         }
                     }
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(5);
+
+                    // 字体倍率配置
+                    GUILayout.Label($"UI 字体倍率：{_fontScaleConfig.Value:F2}x");
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(5);
+                    _fontScaleConfig.Value = GUILayout.HorizontalSlider(_fontScaleConfig.Value, 0.8f, 1.8f);
+                    GUILayout.Space(5);
                     GUILayout.EndHorizontal();
                     GUILayout.Space(5);
                     
@@ -1269,7 +1290,11 @@ Response format MUST be:
                 _promptTextConfig.Value,       // promptText
                 _promptLangConfig.Value,       // promptLang
                 Logger,                        // logger
-                (clip) => { Log.Info("[TTS] 预热完成！"); },  // onComplete
+                (clip) =>
+                {
+                    if (clip != null) Destroy(clip);
+                    Log.Info("[TTS] 预热完成！");
+                },  // onComplete
                 1,                             // maxRetries
                 10f,                           // timeoutSeconds
                 _audioPathCheckConfig.Value    // audioPathCheck
@@ -1312,6 +1337,11 @@ Response format MUST be:
                 yield return new WaitForSecondsRealtime(waitTime);
                 GameBridge.CallNativeChangeAnim(250);
                 GameBridge.RestoreLookAt();
+                if (voiceClip != null)
+                {
+                    if (_audioSource != null && _audioSource.clip == voiceClip) _audioSource.clip = null;
+                    Destroy(voiceClip);
+                }
                 _isAISpeaking = false;
                 yield break;
             }
@@ -1331,6 +1361,11 @@ Response format MUST be:
                 _audioSource.Stop();
             }
             GameBridge.RestoreLookAt();
+            if (voiceClip != null)
+            {
+                if (_audioSource != null && _audioSource.clip == voiceClip) _audioSource.clip = null;
+                Destroy(voiceClip);
+            }
             _isAISpeaking = false;
         }
 
@@ -1553,9 +1588,15 @@ Response format MUST be:
                 
                 if (rightIcons == null)
                 {
-                    Log.Warning($"找不到TopIcons容器: {topIconsPath}");
+                    _aiChatButtonMissingWarnings++;
+                    if (_aiChatButtonMissingWarnings <= 3 || _aiChatButtonMissingWarnings % 12 == 0)
+                    {
+                        Log.Warning($"找不到TopIcons容器: {topIconsPath}");
+                    }
                     return;
                 }
+
+                _aiChatButtonMissingWarnings = 0;
                 
                 // 创建新按钮游戏对象
                 _aiChatButton = new GameObject("IconAIChat_Button");
@@ -1611,7 +1652,7 @@ Response format MUST be:
                 for (int i = 0; i < rightIcons.transform.childCount; i++)
                 {
                     RectTransform childRect = rightIcons.transform.GetChild(i).GetComponent<RectTransform>();
-                    if (childRect != null)
+                    if (childRect != null && childRect.gameObject != _aiChatButton)
                     {
                         children.Add(childRect);
                     }
@@ -1621,9 +1662,9 @@ Response format MUST be:
                 children.Sort((a, b) => a.anchoredPosition.y.CompareTo(b.anchoredPosition.y));
                 
                 // 如果有其他按钮，将新按钮放在最下面
-                if (children.Count > 1) // 至少有一个其他按钮
+                if (children.Count > 0) // 至少有一个其他按钮
                 {
-                    RectTransform lowestButton = children[3]; // 第一个是最下面的
+                    RectTransform lowestButton = children[0]; // 第一个是最下面的
                     float spacing = 10f;
                     rectTransform.anchoredPosition = new Vector2(
                         lowestButton.anchoredPosition.x,
@@ -1640,6 +1681,7 @@ Response format MUST be:
                 rectTransform.anchorMin = new Vector2(1f, 1f);
                 rectTransform.anchorMax = new Vector2(1f, 1f);
                 rectTransform.pivot = new Vector2(0.5f, 0.5f);
+                KeepAIChatButtonOnTop();
                 
                 _aiChatButtonAdded = true;
                 Log.Info($"✅ AI聊天按钮已添加到RightIcons容器");
@@ -1647,6 +1689,27 @@ Response format MUST be:
             catch (Exception ex)
             {
                 Log.Error($"添加AI聊天按钮失败: {ex.Message}");
+            }
+        }
+
+        private void KeepAIChatButtonOnTop()
+        {
+            if (_aiChatButton == null) return;
+
+            _aiChatButton.transform.SetAsLastSibling();
+
+            Canvas canvas = _aiChatButton.GetComponent<Canvas>();
+            if (canvas == null)
+            {
+                canvas = _aiChatButton.AddComponent<Canvas>();
+            }
+            canvas.overrideSorting = true;
+            canvas.sortingOrder = 30000;
+
+            GraphicRaycaster raycaster = _aiChatButton.GetComponent<GraphicRaycaster>();
+            if (raycaster == null)
+            {
+                _aiChatButton.AddComponent<GraphicRaycaster>();
             }
         }
 
@@ -1796,6 +1859,7 @@ Response format MUST be:
                 ["ReverseEnterBehavior"] = _reverseEnterBehaviorConfig,
                 ["BackgroundOpacity"] = _backgroundOpacity,
                 ["ShowWindowTitle"] = _showWindowTitle,
+                ["FontScale"] = _fontScaleConfig,
                 ["WindowWidth"] = _windowWidthConfig,
                 ["WindowHeightBase"] = _windowHeightConfig
             };
@@ -1864,6 +1928,7 @@ Response format MUST be:
                     case "ReverseEnterBehavior": _reverseEnterBehaviorConfig.Value = bool.Parse(value); break;
                     case "BackgroundOpacity": _backgroundOpacity.Value = Mathf.Clamp(float.Parse(value), 0f, 1f); break;
                     case "ShowWindowTitle": _showWindowTitle.Value = bool.Parse(value); break;
+                    case "FontScale": _fontScaleConfig.Value = Mathf.Clamp(float.Parse(value), 0.8f, 1.8f); break;
                     case "WindowWidth": _windowWidthConfig.Value = Mathf.Max(300f, float.Parse(value)); break;
                     case "WindowHeightBase": _windowHeightConfig.Value = Mathf.Max(100f, float.Parse(value)); break;
                     default:
