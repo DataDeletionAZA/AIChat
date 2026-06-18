@@ -117,6 +117,10 @@ namespace ChillAIMod
         private string _playerInput = "";
         private bool _isProcessing = false;
         private bool _isResizing = false; // 新增：拖拽调整大小状态
+        private bool _isDraggingChatButton = false;
+        private bool _chatButtonMovedDuringDrag = false;
+        private Vector2 _chatButtonDragOffset = Vector2.zero;
+        private Vector2 _chatButtonDragStart = Vector2.zero;
 
         private Process _launchedTTSProcess;
         private bool _isTTSServiceReady = false;
@@ -438,13 +442,13 @@ Response format MUST be:
             }
 
             // 检查并添加AI聊天按钮
-            if (_addChatButtonConfig.Value && !_aiChatButtonAdded && Time.unscaledTime >= _nextAIChatButtonSearchTime)
+            if (!IsMacPlatform() && _addChatButtonConfig.Value && !_aiChatButtonAdded && Time.unscaledTime >= _nextAIChatButtonSearchTime)
             {
                 _nextAIChatButtonSearchTime = Time.unscaledTime + 5f;
                 AddAIChatButtonToRightIcons();
             }
 
-            if (_addChatButtonConfig.Value && _aiChatButtonAdded && _aiChatButton != null && Time.frameCount % 120 == 0)
+            if (!IsMacPlatform() && _addChatButtonConfig.Value && _aiChatButtonAdded && _aiChatButton != null && Time.frameCount % 120 == 0)
             {
                 KeepAIChatButtonOnTop();
             }
@@ -555,6 +559,9 @@ Response format MUST be:
             GUI.backgroundColor = new Color(0.08f, 0.08f, 0.16f, 0.92f);
             GUI.color = Color.white;
 
+            Rect buttonRect = new Rect(x, y, buttonSize, buttonSize);
+            HandleMacFloatingChatButtonDrag(buttonRect, buttonSize);
+
             GUIStyle buttonStyle = new GUIStyle(GUI.skin.button)
             {
                 alignment = TextAnchor.MiddleCenter,
@@ -562,14 +569,73 @@ Response format MUST be:
                 fontSize = Mathf.RoundToInt(buttonSize * 0.36f)
             };
 
-            if (GUI.Button(new Rect(x, y, buttonSize, buttonSize), "AI", buttonStyle))
-            {
-                _showInputWindow = !_showInputWindow;
-            }
+            GUI.Box(buttonRect, "AI", buttonStyle);
 
             GUI.depth = oldDepth;
             GUI.backgroundColor = oldBackgroundColor;
             GUI.color = oldColor;
+        }
+
+        private void HandleMacFloatingChatButtonDrag(Rect buttonRect, float buttonSize)
+        {
+            Event currentEvent = Event.current;
+            if (currentEvent == null)
+            {
+                return;
+            }
+
+            switch (currentEvent.type)
+            {
+                case EventType.MouseDown:
+                    if (currentEvent.button == 0 && buttonRect.Contains(currentEvent.mousePosition))
+                    {
+                        _isDraggingChatButton = true;
+                        _chatButtonMovedDuringDrag = false;
+                        _chatButtonDragStart = currentEvent.mousePosition;
+                        _chatButtonDragOffset = currentEvent.mousePosition - new Vector2(buttonRect.x, buttonRect.y);
+                        currentEvent.Use();
+                    }
+                    break;
+
+                case EventType.MouseDrag:
+                    if (_isDraggingChatButton)
+                    {
+                        Vector2 mousePosition = currentEvent.mousePosition;
+                        if ((mousePosition - _chatButtonDragStart).sqrMagnitude > 16f)
+                        {
+                            _chatButtonMovedDuringDrag = true;
+                        }
+
+                        float newX = Mathf.Clamp(mousePosition.x - _chatButtonDragOffset.x, 8f, Screen.width - buttonSize - 8f);
+                        float newY = Mathf.Clamp(mousePosition.y - _chatButtonDragOffset.y, 8f, Screen.height - buttonSize - 8f);
+                        SaveMacFloatingChatButtonPosition(newX, newY, buttonSize);
+                        currentEvent.Use();
+                    }
+                    break;
+
+                case EventType.MouseUp:
+                    if (_isDraggingChatButton && currentEvent.button == 0)
+                    {
+                        _isDraggingChatButton = false;
+                        if (!_chatButtonMovedDuringDrag && buttonRect.Contains(currentEvent.mousePosition))
+                        {
+                            _showInputWindow = !_showInputWindow;
+                        }
+                        currentEvent.Use();
+                    }
+                    break;
+            }
+        }
+
+        private void SaveMacFloatingChatButtonPosition(float x, float y, float buttonSize)
+        {
+            if (_chatButtonOffsetXConfig == null || _chatButtonOffsetYConfig == null)
+            {
+                return;
+            }
+
+            _chatButtonOffsetXConfig.Value = x + buttonSize * 0.5f - Screen.width;
+            _chatButtonOffsetYConfig.Value = -(y + buttonSize * 0.5f);
         }
 
         void DrawWindowContent(int windowID)
