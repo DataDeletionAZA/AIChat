@@ -1282,6 +1282,7 @@ Response format MUST be:
             }
             // TTS 就绪后发送预热请求，加速首次语音生成
             Log.Info("[TTS] 服务就绪，正在预热...");
+            AudioClip warmupClip = null;
             yield return StartCoroutine(TTSClient.DownloadVoiceWithRetry(
                 _sovitsUrlConfig.Value + "/tts",  // url
                 "こんにちは",                   // textToSpeak
@@ -1290,15 +1291,26 @@ Response format MUST be:
                 _promptTextConfig.Value,       // promptText
                 _promptLangConfig.Value,       // promptLang
                 Logger,                        // logger
-                (clip) =>
-                {
-                    if (clip != null) Destroy(clip);
-                    Log.Info("[TTS] 预热完成！");
-                },  // onComplete
+                (clip) => warmupClip = clip,   // onComplete
                 1,                             // maxRetries
                 10f,                           // timeoutSeconds
                 _audioPathCheckConfig.Value    // audioPathCheck
             ));
+            if (warmupClip != null) yield return StartCoroutine(ReleaseAudioClip(warmupClip));
+            Log.Info("[TTS] 预热完成！");
+        }
+
+        IEnumerator ReleaseAudioClip(AudioClip clip)
+        {
+            if (clip == null) yield break;
+            if (_audioSource != null && _audioSource.clip == clip)
+            {
+                _audioSource.Stop();
+                _audioSource.clip = null;
+            }
+            Destroy(clip);
+            yield return null;
+            yield return Resources.UnloadUnusedAssets();
         }
 
         IEnumerator PlayNativeAnimation(string emotion, AudioClip voiceClip)
@@ -1337,11 +1349,7 @@ Response format MUST be:
                 yield return new WaitForSecondsRealtime(waitTime);
                 GameBridge.CallNativeChangeAnim(250);
                 GameBridge.RestoreLookAt();
-                if (voiceClip != null)
-                {
-                    if (_audioSource != null && _audioSource.clip == voiceClip) _audioSource.clip = null;
-                    Destroy(voiceClip);
-                }
+                if (voiceClip != null) yield return StartCoroutine(ReleaseAudioClip(voiceClip));
                 _isAISpeaking = false;
                 yield break;
             }
@@ -1361,11 +1369,7 @@ Response format MUST be:
                 _audioSource.Stop();
             }
             GameBridge.RestoreLookAt();
-            if (voiceClip != null)
-            {
-                if (_audioSource != null && _audioSource.clip == voiceClip) _audioSource.clip = null;
-                Destroy(voiceClip);
-            }
+            if (voiceClip != null) yield return StartCoroutine(ReleaseAudioClip(voiceClip));
             _isAISpeaking = false;
         }
 
@@ -1413,7 +1417,20 @@ Response format MUST be:
 
             // 3. 编码并发送
             byte[] wavData = AudioUtils.EncodeToWAV(validClip);
+            if (validClip != null) Destroy(validClip);
+            if (_recordingClip != null)
+            {
+                Destroy(_recordingClip);
+                _recordingClip = null;
+            }
+            StartCoroutine(UnloadUnusedAssetsSoon());
             StartCoroutine(ASRWorkflow(wavData));
+        }
+
+        IEnumerator UnloadUnusedAssetsSoon()
+        {
+            yield return null;
+            yield return Resources.UnloadUnusedAssets();
         }
         /// <summary>
         /// ASR 业务流：负责调度网络请求和后续的 AI 响应
