@@ -87,6 +87,11 @@ namespace ChillAIMod
         // --- 新增：添加聊天按钮配置 ---
         private ConfigEntry<bool> _addChatButtonConfig;
 
+        // --- 待机资源清理配置 ---
+        private ConfigEntry<bool> _idleCleanupConfig;
+        private ConfigEntry<float> _idleCleanupIntervalConfig;
+        private Coroutine _idleCleanupCoroutine;
+
         // 缓存游戏 UI 引用（避免 Find 在隐藏对象上失败）
         private Transform _cachedOriginalTextTrans = null;
         private GameObject _cachedCanvas = null;
@@ -241,6 +246,12 @@ Response format MUST be:
             _addChatButtonConfig = Config.Bind("3. UI", "AddChatButton", IsMacPlatform(),
                 "在游戏UI中添加聊天按钮（开启后在屏幕右边显示）");
 
+            // --- 维护配置 ---
+            _idleCleanupConfig = Config.Bind("5. Maintenance", "IdleCleanup", true,
+                "空闲时定期清理未使用资源，降低 Unity 在 macOS 上缓慢涨内存的概率");
+            _idleCleanupIntervalConfig = Config.Bind("5. Maintenance", "IdleCleanupIntervalSeconds", 120f,
+                "空闲资源清理间隔秒数，建议 120 - 300");
+
             // --- 人设配置 ---
             _useFinetunedModel = Config.Bind("4. Persona", "UseFinetunedModel", false,
                 "使用微调模型（satone-emotion，支持19种情感标签，开启后将自动设置对应的 System Prompt）");
@@ -274,6 +285,10 @@ Response format MUST be:
             if (_ttsHealthCheckCoroutine == null)
             {
                 _ttsHealthCheckCoroutine = StartCoroutine(TTSHealthCheckLoop());
+            }
+            if (_idleCleanupCoroutine == null)
+            {
+                _idleCleanupCoroutine = StartCoroutine(IdleCleanupLoop());
             }
 
             // 【初始化分层记忆系统】
@@ -1432,6 +1447,23 @@ Response format MUST be:
             yield return null;
             yield return Resources.UnloadUnusedAssets();
         }
+
+        IEnumerator IdleCleanupLoop()
+        {
+            while (true)
+            {
+                float interval = Mathf.Clamp(_idleCleanupIntervalConfig.Value, 30f, 600f);
+                yield return new WaitForSecondsRealtime(interval);
+
+                if (!_idleCleanupConfig.Value) continue;
+                if (_isProcessing || _isAISpeaking || _isRecording) continue;
+
+                Log.Debug("[Memory] 空闲资源清理开始");
+                yield return Resources.UnloadUnusedAssets();
+                GC.Collect();
+                Log.Debug("[Memory] 空闲资源清理完成");
+            }
+        }
         /// <summary>
         /// ASR 业务流：负责调度网络请求和后续的 AI 响应
         /// </summary>
@@ -1494,6 +1526,11 @@ Response format MUST be:
             {
                 StopCoroutine(_ttsHealthCheckCoroutine);
                 _ttsHealthCheckCoroutine = null;
+            }
+            if (_idleCleanupCoroutine != null)
+            {
+                StopCoroutine(_idleCleanupCoroutine);
+                _idleCleanupCoroutine = null;
             }
             if (_quitTTSServiceOnQuitConfig.Value && _launchedTTSProcess != null && !_launchedTTSProcess.HasExited)
             {   
@@ -1878,7 +1915,9 @@ Response format MUST be:
                 ["ShowWindowTitle"] = _showWindowTitle,
                 ["FontScale"] = _fontScaleConfig,
                 ["WindowWidth"] = _windowWidthConfig,
-                ["WindowHeightBase"] = _windowHeightConfig
+                ["WindowHeightBase"] = _windowHeightConfig,
+                ["IdleCleanup"] = _idleCleanupConfig,
+                ["IdleCleanupIntervalSeconds"] = _idleCleanupIntervalConfig
             };
         }
 
@@ -1948,6 +1987,8 @@ Response format MUST be:
                     case "FontScale": _fontScaleConfig.Value = Mathf.Clamp(float.Parse(value), 0.8f, 1.8f); break;
                     case "WindowWidth": _windowWidthConfig.Value = Mathf.Max(300f, float.Parse(value)); break;
                     case "WindowHeightBase": _windowHeightConfig.Value = Mathf.Max(100f, float.Parse(value)); break;
+                    case "IdleCleanup": _idleCleanupConfig.Value = bool.Parse(value); break;
+                    case "IdleCleanupIntervalSeconds": _idleCleanupIntervalConfig.Value = Mathf.Clamp(float.Parse(value), 30f, 600f); break;
                     default:
                         error = $"unknown config key: {key}";
                         return false;
