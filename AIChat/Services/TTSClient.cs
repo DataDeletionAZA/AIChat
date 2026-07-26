@@ -133,5 +133,25 @@ namespace AIChat.Services
                 onResult?.Invoke(isReady);
             }
         }
+
+        public static IEnumerator RequestServiceExit(string baseUrl, ManualLogSource logger)
+        {
+            string controlUrl = baseUrl.TrimEnd('/') + "/control?command=exit";
+            using (UnityWebRequest req = UnityWebRequest.Get(controlUrl))
+            {
+                req.timeout = 5;
+                yield return req.SendWebRequest();
+
+                if (req.result == UnityWebRequest.Result.Success)
+                {
+                    logger.LogDebug("[TTS] 服务已接受休眠请求。");
+                }
+                else
+                {
+                    // 服务可能会先关闭连接再结束进程，因此连接中断不一定代表关闭失败。
+                    logger.LogDebug($"[TTS] 休眠请求返回: {req.error ?? $"HTTP {req.responseCode}"}");
+                }
+            }
+        }
     }
 }

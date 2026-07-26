@@ -47,6 +47,8 @@ namespace ChillAIMod
         private ConfigEntry<string> _TTSServicePathConfig;
         private ConfigEntry<bool> _LaunchTTSServiceConfig;
         private ConfigEntry<bool> _quitTTSServiceOnQuitConfig;
+        private ConfigEntry<bool> _autoPauseTTSServiceConfig;
+        private ConfigEntry<float> _ttsIdleTimeoutConfig;
         private ConfigEntry<bool> _audioPathCheckConfig;
         private ConfigEntry<bool> _japaneseCheckConfig;
 
@@ -123,6 +125,10 @@ namespace ChillAIMod
         private Process _launchedTTSProcess;
         private bool _isTTSServiceReady = false;
         private Coroutine _ttsHealthCheckCoroutine;
+        private Coroutine _ttsIdleMonitorCoroutine;
+        private float _lastTTSActivityRealtime;
+        private bool _isTTSLifecycleBusy = false;
+        private bool _ttsWasAutoPaused = false;
         private const float TTSHealthCheckInterval = 5f; // 每5秒检查一次
 
         private AudioSource _audioSource;
@@ -211,6 +217,10 @@ Response format MUST be:
             _TTSServicePathConfig = Config.Bind("2. TTS", "TTS_Service_Script_Path", GetDefaultTTSServiceScriptPath(), "TTS 服务脚本文件路径");
             _LaunchTTSServiceConfig = Config.Bind("2. TTS", "LaunchTTSService", true, "启动时自动运行 TTS 服务");
             _quitTTSServiceOnQuitConfig = Config.Bind("2. TTS", "QuitTTSServiceOnQuit", true, "退出时自动关闭 TTS 服务");
+            _autoPauseTTSServiceConfig = Config.Bind("2. TTS", "AutoPauseTTSService", true,
+                "语音服务闲置一段时间后自动关闭，需要语音时再自动启动（仅限本机服务）");
+            _ttsIdleTimeoutConfig = Config.Bind("2. TTS", "TTSIdleTimeoutSeconds", 300f,
+                "语音服务自动休眠前的闲置秒数，默认 300 秒（5 分钟）");
             _refAudioPathConfig = Config.Bind("2. TTS", "Audio_File_Path", @"Voice_MainScenario_27_016.wav", "GSV 访问音频文件的路径（可以是相对路径）");
             _audioPathCheckConfig = Config.Bind("2. TTS", "AudioPathCheck", false, "从 Mod 侧检测音频文件路径");
             _promptTextConfig = Config.Bind("2. TTS", "Audio_File_Text", "君が集中した時のシータ波を検出して、リンクをつなぎ直せば元通りになるはず。", "音频文件台词");
@@ -280,6 +290,7 @@ Response format MUST be:
             _tempWidthString = _windowWidthConfig.Value.ToString("F0");
             _tempHeightString = _windowHeightConfig.Value.ToString("F0");
             _tempVolumeString = _voiceVolumeConfig.Value.ToString("F2");
+            MarkTTSActivity();
             TryLaunchTTSService();
             // 启动后台 TTS 健康检测
             if (_ttsHealthCheckCoroutine == null)
@@ -289,6 +300,10 @@ Response format MUST be:
             if (_idleCleanupCoroutine == null)
             {
                 _idleCleanupCoroutine = StartCoroutine(IdleCleanupLoop());
+            }
+            if (_ttsIdleMonitorCoroutine == null)
+            {
+                _ttsIdleMonitorCoroutine = StartCoroutine(TTSIdleMonitorLoop());
             }
 
             // 【初始化分层记忆系统】
@@ -358,6 +373,15 @@ Response format MUST be:
                    Application.platform == RuntimePlatform.OSXEditor;
         }
 
+        private bool IsLocalTTSServiceUrl()
+        {
+            if (!Uri.TryCreate(_sovitsUrlConfig.Value, UriKind.Absolute, out Uri uri)) return false;
+
+            return string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(uri.Host, "::1", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static ProcessStartInfo CreateTTSProcessStartInfo(string scriptPath)
         {
             string workingDirectory = Path.GetDirectoryName(scriptPath);
@@ -385,32 +409,50 @@ Response format MUST be:
             };
         }
 
-        private void TryLaunchTTSService()
+        private bool TryLaunchTTSService(bool forceLaunch = false)
         {
-            if (!_LaunchTTSServiceConfig.Value) return;
+            if (!forceLaunch && !_LaunchTTSServiceConfig.Value) return false;
+            if (forceLaunch && !IsLocalTTSServiceUrl())
+            {
+                Log.Warning("[TTS] 自动唤醒仅支持本机 TTS 服务。");
+                return false;
+            }
+
+            try
+            {
+                if (_launchedTTSProcess != null && !_launchedTTSProcess.HasExited) return true;
+            }
+            catch
+            {
+                _launchedTTSProcess = null;
+            }
 
             string scriptPath = NormalizeLocalPath(_TTSServicePathConfig.Value);
             if (string.IsNullOrWhiteSpace(scriptPath))
             {
                 Log.Warning("TTS 服务脚本路径为空，已跳过自动启动。");
-                return;
+                return false;
             }
 
             if (!File.Exists(scriptPath))
             {
                 Log.Warning($"TTS 服务脚本不存在，已跳过自动启动: {scriptPath}");
-                return;
+                return false;
             }
 
             try
             {
                 ProcessStartInfo startInfo = CreateTTSProcessStartInfo(scriptPath);
                 _launchedTTSProcess = Process.Start(startInfo);
+                _isTTSServiceReady = false;
+                _ttsWasAutoPaused = false;
                 Log.Info($"已启动 TTS 服务: {scriptPath}");
+                return _launchedTTSProcess != null;
             }
             catch (Exception ex)
             {
                 Log.Error($"启动 TTS 服务失败: {ex.Message}");
+                return false;
             }
         }
 
@@ -610,7 +652,9 @@ Response format MUST be:
             string status = GameBridge._heroineService != null ? "🟢 核心已连接" : "🔴 正在寻找核心...";
             GUILayout.Label(status);
 
-            string ttsStatus = _isTTSServiceReady ? "🟢 TTS 服务已就绪" : "🔴 正在等待 TTS 服务启动...";
+            string ttsStatus = _isTTSServiceReady
+                ? "🟢 TTS 服务已就绪"
+                : (_ttsWasAutoPaused ? "⏸ TTS 服务已休眠，将在需要时唤醒" : "🔴 正在等待 TTS 服务启动...");
             GUILayout.Label(ttsStatus);
 
             // 设置展开按钮 (全宽)
@@ -693,6 +737,27 @@ Response format MUST be:
                     GUILayout.Space(5);
                     _LaunchTTSServiceConfig.Value = GUILayout.Toggle(_LaunchTTSServiceConfig.Value, "启动时自动运行 TTS 服务", GUILayout.Height(elementHeight));
                     _quitTTSServiceOnQuitConfig.Value = GUILayout.Toggle(_quitTTSServiceOnQuitConfig.Value, "退出时自动关闭 TTS 服务", GUILayout.Height(elementHeight));
+                    bool newAutoPauseValue = GUILayout.Toggle(
+                        _autoPauseTTSServiceConfig.Value,
+                        "闲置后自动关闭语音服务，需要时再唤醒",
+                        GUILayout.Height(elementHeight));
+                    if (newAutoPauseValue != _autoPauseTTSServiceConfig.Value)
+                    {
+                        _autoPauseTTSServiceConfig.Value = newAutoPauseValue;
+                        MarkTTSActivity();
+                    }
+                    if (_autoPauseTTSServiceConfig.Value)
+                    {
+                        float idleMinutes = Mathf.Clamp(_ttsIdleTimeoutConfig.Value / 60f, 1f, 30f);
+                        GUILayout.Label($"自动休眠等待时间：{Mathf.RoundToInt(idleMinutes)} 分钟");
+                        float newIdleMinutes = GUILayout.HorizontalSlider(idleMinutes, 1f, 30f);
+                        int roundedMinutes = Mathf.RoundToInt(newIdleMinutes);
+                        if (roundedMinutes != Mathf.RoundToInt(idleMinutes))
+                        {
+                            _ttsIdleTimeoutConfig.Value = roundedMinutes * 60f;
+                            MarkTTSActivity();
+                        }
+                    }
                     GUILayout.Label("GSV 访问音频文件的路径（可以是相对路径）：");
                     // 路径通常很长，必须加 MinWidth(50f)
                     _refAudioPathConfig.Value = GUILayout.TextField(_refAudioPathConfig.Value, GUILayout.Height(elementHeight), GUILayout.MinWidth(50f));
@@ -1225,22 +1290,33 @@ Response format MUST be:
 
                 if (!string.IsNullOrEmpty(voiceText) && isJapanese)
                 {
+                    bool ttsReady = true;
+                    if (_autoPauseTTSServiceConfig.Value)
+                    {
+                        myText.text = "正在唤醒语音模型...";
+                        ttsReady = false;
+                        yield return StartCoroutine(EnsureTTSServiceReady((ready) => ttsReady = ready));
+                    }
+
                     myText.text = "message is sending through cyber space";
                     AudioClip downloadedClip = null;
                     apiResult.TtsAttempted = true;
-                    // 【修改点 1: 移除 apiKey 参数，因为 TTS 是本地部署】
-                    yield return StartCoroutine(TTSClient.DownloadVoiceWithRetry(
-                        _sovitsUrlConfig.Value + "/tts",
-                        voiceText,
-                        _targetLangConfig.Value,
-                        _refAudioPathConfig.Value,
-                        _promptTextConfig.Value,
-                        _promptLangConfig.Value,
-                        Logger,
-                        (clip) => downloadedClip = clip,
-                        3,
-                        30f,
-                        _audioPathCheckConfig.Value));
+                    if (ttsReady)
+                    {
+                        // TTS 是本地部署，不需要 API Key。
+                        yield return StartCoroutine(TTSClient.DownloadVoiceWithRetry(
+                            _sovitsUrlConfig.Value + "/tts",
+                            voiceText,
+                            _targetLangConfig.Value,
+                            _refAudioPathConfig.Value,
+                            _promptTextConfig.Value,
+                            _promptLangConfig.Value,
+                            Logger,
+                            (clip) => downloadedClip = clip,
+                            3,
+                            30f,
+                            _audioPathCheckConfig.Value));
+                    }
 
                     if (downloadedClip != null)
                     {
@@ -1261,6 +1337,8 @@ Response format MUST be:
                         myText.text = subtitleText;
                         yield return StartCoroutine(PlayNativeAnimation(emotionTag, null)); // 传 null 进去
                     }
+
+                    if (ttsReady) MarkTTSActivity();
                 }
                 else
                 {
@@ -1295,6 +1373,14 @@ Response format MUST be:
                 }));
                 yield return new WaitForSeconds(TTSHealthCheckInterval);
             }
+
+            MarkTTSActivity();
+            if (_autoPauseTTSServiceConfig.Value)
+            {
+                Log.Info("[TTS] 服务已就绪；闲置后将自动休眠。");
+                yield break;
+            }
+
             // TTS 就绪后发送预热请求，加速首次语音生成
             Log.Info("[TTS] 服务就绪，正在预热...");
             AudioClip warmupClip = null;
@@ -1313,6 +1399,177 @@ Response format MUST be:
             ));
             if (warmupClip != null) yield return StartCoroutine(ReleaseAudioClip(warmupClip));
             Log.Info("[TTS] 预热完成！");
+        }
+
+        private void MarkTTSActivity()
+        {
+            _lastTTSActivityRealtime = Time.realtimeSinceStartup;
+            _ttsWasAutoPaused = false;
+        }
+
+        IEnumerator EnsureTTSServiceReady(Action<bool> onResult)
+        {
+            bool ready = false;
+            yield return StartCoroutine(TTSClient.CheckTTSHealthOnce(
+                _sovitsUrlConfig.Value,
+                Logger,
+                (result) => ready = result));
+
+            if (ready)
+            {
+                _isTTSServiceReady = true;
+                MarkTTSActivity();
+                onResult?.Invoke(true);
+                yield break;
+            }
+
+            _isTTSServiceReady = false;
+            if (!_autoPauseTTSServiceConfig.Value || !IsLocalTTSServiceUrl())
+            {
+                onResult?.Invoke(false);
+                yield break;
+            }
+
+            _isTTSLifecycleBusy = true;
+            Log.Info("[TTS] 语音服务当前未运行，正在自动唤醒...");
+            if (!TryLaunchTTSService(true))
+            {
+                _isTTSLifecycleBusy = false;
+                onResult?.Invoke(false);
+                yield break;
+            }
+
+            float deadline = Time.realtimeSinceStartup + 90f;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                yield return new WaitForSecondsRealtime(2f);
+                yield return StartCoroutine(TTSClient.CheckTTSHealthOnce(
+                    _sovitsUrlConfig.Value,
+                    Logger,
+                    (result) => ready = result));
+                if (ready) break;
+            }
+
+            _isTTSLifecycleBusy = false;
+            _isTTSServiceReady = ready;
+            if (ready)
+            {
+                MarkTTSActivity();
+                Log.Info("[TTS] 语音服务已自动唤醒。");
+            }
+            else
+            {
+                Log.Error("[TTS] 自动唤醒超时，已改为只显示字幕。");
+            }
+
+            onResult?.Invoke(ready);
+        }
+
+        IEnumerator TTSIdleMonitorLoop()
+        {
+            while (true)
+            {
+                yield return new WaitForSecondsRealtime(10f);
+
+                if (!_autoPauseTTSServiceConfig.Value || !_isTTSServiceReady) continue;
+                if (!IsLocalTTSServiceUrl()) continue;
+                if (_isTTSLifecycleBusy || _isProcessing || _isAISpeaking || _isRecording) continue;
+
+                float idleTimeout = Mathf.Clamp(_ttsIdleTimeoutConfig.Value, 60f, 3600f);
+                if (Time.realtimeSinceStartup - _lastTTSActivityRealtime < idleTimeout) continue;
+
+                yield return StartCoroutine(PauseTTSServiceAfterIdle());
+            }
+        }
+
+        IEnumerator PauseTTSServiceAfterIdle()
+        {
+            if (_isTTSLifecycleBusy) yield break;
+
+            _isTTSLifecycleBusy = true;
+            Log.Info("[TTS] 已达到闲置时间，正在释放语音模型...");
+            yield return StartCoroutine(TTSClient.RequestServiceExit(_sovitsUrlConfig.Value, Logger));
+            yield return new WaitForSecondsRealtime(1.5f);
+
+            bool stillReady = false;
+            yield return StartCoroutine(TTSClient.CheckTTSHealthOnce(
+                _sovitsUrlConfig.Value,
+                Logger,
+                (ready) => stillReady = ready));
+
+            if (stillReady && IsTrackedTTSProcessRunning())
+            {
+                StopTrackedTTSProcess();
+                yield return new WaitForSecondsRealtime(1f);
+                yield return StartCoroutine(TTSClient.CheckTTSHealthOnce(
+                    _sovitsUrlConfig.Value,
+                    Logger,
+                    (ready) => stillReady = ready));
+            }
+
+            _isTTSLifecycleBusy = false;
+            if (stillReady)
+            {
+                _isTTSServiceReady = true;
+                MarkTTSActivity();
+                Log.Warning("[TTS] 语音服务未能自动休眠，将稍后重试。");
+                yield break;
+            }
+
+            _isTTSServiceReady = false;
+            _ttsWasAutoPaused = true;
+            if (IsTrackedTTSProcessRunning())
+            {
+                StopTrackedTTSProcess();
+                yield return new WaitForSecondsRealtime(0.5f);
+            }
+            CleanupExitedTTSProcess();
+            Log.Info("[TTS] 语音模型已休眠，相关内存已释放。");
+        }
+
+        private bool IsTrackedTTSProcessRunning()
+        {
+            if (_launchedTTSProcess == null) return false;
+
+            try
+            {
+                return !_launchedTTSProcess.HasExited;
+            }
+            catch
+            {
+                _launchedTTSProcess = null;
+                return false;
+            }
+        }
+
+        private void StopTrackedTTSProcess()
+        {
+            if (!IsTrackedTTSProcessRunning()) return;
+
+            try
+            {
+                ProcessHelper.KillProcessTree(_launchedTTSProcess);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"[TTS] 备用关闭方式失败: {ex.Message}");
+            }
+        }
+
+        private void CleanupExitedTTSProcess()
+        {
+            if (_launchedTTSProcess == null) return;
+
+            try
+            {
+                if (!_launchedTTSProcess.HasExited) return;
+                _launchedTTSProcess.Dispose();
+                _launchedTTSProcess = null;
+            }
+            catch
+            {
+                _launchedTTSProcess = null;
+            }
         }
 
         IEnumerator ReleaseAudioClip(AudioClip clip)
@@ -1472,12 +1729,25 @@ Response format MUST be:
             _isProcessing = true; // 锁定 UI
             string recognizedResult = "";
 
+            if (_autoPauseTTSServiceConfig.Value)
+            {
+                bool ttsReady = false;
+                yield return StartCoroutine(EnsureTTSServiceReady((ready) => ttsReady = ready));
+                if (!ttsReady)
+                {
+                    Log.Error("[ASR] 无法唤醒语音服务，已取消本次语音识别。");
+                    _isProcessing = false;
+                    yield break;
+                }
+            }
+
             // A. 调用 ApiService 只负责拿回文字
             yield return StartCoroutine(ASRClient.SendAudioToASR(
                 wavData,
                 _sovitsUrlConfig.Value,
                 (text) => recognizedResult = text
             ));
+            MarkTTSActivity();
 
             // B. 根据拿回的结果，在主类决定下一步业务走向
             if (!string.IsNullOrEmpty(recognizedResult))
@@ -1531,6 +1801,11 @@ Response format MUST be:
             {
                 StopCoroutine(_idleCleanupCoroutine);
                 _idleCleanupCoroutine = null;
+            }
+            if (_ttsIdleMonitorCoroutine != null)
+            {
+                StopCoroutine(_ttsIdleMonitorCoroutine);
+                _ttsIdleMonitorCoroutine = null;
             }
             if (_quitTTSServiceOnQuitConfig.Value && _launchedTTSProcess != null && !_launchedTTSProcess.HasExited)
             {   
@@ -1901,6 +2176,8 @@ Response format MUST be:
                 ["TTS_Service_Script_Path"] = _TTSServicePathConfig,
                 ["LaunchTTSService"] = _LaunchTTSServiceConfig,
                 ["QuitTTSServiceOnQuit"] = _quitTTSServiceOnQuitConfig,
+                ["AutoPauseTTSService"] = _autoPauseTTSServiceConfig,
+                ["TTSIdleTimeoutSeconds"] = _ttsIdleTimeoutConfig,
                 ["Audio_File_Path"] = _refAudioPathConfig,
                 ["Audio_File_Text"] = _promptTextConfig,
                 ["PromptLang"] = _promptLangConfig,
@@ -1972,6 +2249,8 @@ Response format MUST be:
                     case "TTS_Service_Script_Path": _TTSServicePathConfig.Value = value ?? string.Empty; break;
                     case "LaunchTTSService": _LaunchTTSServiceConfig.Value = bool.Parse(value); break;
                     case "QuitTTSServiceOnQuit": _quitTTSServiceOnQuitConfig.Value = bool.Parse(value); break;
+                    case "AutoPauseTTSService": _autoPauseTTSServiceConfig.Value = bool.Parse(value); MarkTTSActivity(); break;
+                    case "TTSIdleTimeoutSeconds": _ttsIdleTimeoutConfig.Value = Mathf.Clamp(float.Parse(value), 60f, 3600f); MarkTTSActivity(); break;
                     case "Audio_File_Path": _refAudioPathConfig.Value = value ?? string.Empty; break;
                     case "Audio_File_Text": _promptTextConfig.Value = value ?? string.Empty; break;
                     case "PromptLang": _promptLangConfig.Value = value ?? string.Empty; break;
